@@ -5,10 +5,12 @@ concurrency:
   cancel-in-progress: true
 
 on:
-  workflow_dispatch:
   push:
+    branches:
+      - main
     tags:
       - 'v*'
+  workflow_dispatch:
 
 permissions:
   contents: read
