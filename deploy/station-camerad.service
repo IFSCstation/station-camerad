@@ -1,0 +1,28 @@
+[Unit]
+Description=IFSC station webcam feeder (cam_ring)
+Documentation=https://github.com/luizfern12/station-camerad
+After=default.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/camerad --mirror --fps 30 --camera 0
+Restart=on-failure
+RestartSec=2
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=read-only
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+LockPersonality=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+CapabilityBoundingSet=
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX
+
+[Install]
+WantedBy=default.target

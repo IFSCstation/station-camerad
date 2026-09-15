@@ -25,7 +25,7 @@ tracker read it unchanged.
 - [x] `AGENTS.md` + `README.md`
 - [x] Gate clean: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test`, `cargo build --release`
 - [x] Live smoke test vs `cam_ring_peek.py` (unchanged consumer)
-- [ ] systemd unit (service; socket if we later add a control plane)
+- [x] systemd unit (`deploy/` — user service + install script, hardened, live on dev host)
 
 ## Ring protocol (source of truth: `old_layout_ignore/webcam_test/python/cam_ring.py`)
 

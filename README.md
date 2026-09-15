@@ -58,6 +58,22 @@ DroidCam loopback):
 old_layout_ignore/webcam_test/python/cam_ring_peek.py --seconds 3 --save /tmp/frame.png
 ```
 
+## Run as a systemd user service
+
+`deploy/install.sh` builds the release binary, installs it to `~/.local/bin`,
+copies `deploy/station-camerad.service` to `~/.config/systemd/user`, and
+starts + enables it (user unit — no root; the user just needs `video` group
+access to the camera):
+
+```sh
+./deploy/install.sh
+systemctl --user status station-camerad
+systemctl --user stop/restart station-camerad
+```
+
+The unit hardens the process and restarts on failure; the feeder handles a
+missing/busy camera by retrying in-process, and systemd covers the rest.
+
 ## Notes
 
 - V4L2 ABI is hand-declared (`#[repr(C)]`) with compile-time `size_of`/
