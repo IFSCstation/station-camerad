@@ -1,0 +1,105 @@
+name: Build .deb (arm64)
+
+concurrency:
+  group: build-deb
+  cancel-in-progress: true
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+jobs:
+  build-deb:
+    name: Build station-camerad .deb for arm64
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Verify gates
+        run: |
+          cargo fmt --check
+          cargo clippy --all-targets -- -D warnings
+          cargo test
+
+      - name: Build release binaries
+        run: cargo build --release
+
+      - name: Assemble .deb
+        run: |
+          set -euo pipefail
+          version="$(grep '^version' Cargo.toml | head -n1 | cut -d'"' -f2)"
+          pkg="station-camerad_${version}_arm64"
+          root="$RUNNER_TEMP/deb/$pkg"
+          mkdir -p "$root/DEBIAN" \
+                   "$root/usr/bin" \
+                   "$root/usr/lib/systemd/system" \
+                   "$root/usr/share/doc/station-camerad"
+
+          install -m0755 target/release/camerad "$root/usr/bin/camerad"
+          strip --strip-all "$root/usr/bin/camerad"
+
+          sed -e 's|%h/.local/bin/camerad|/usr/bin/camerad|' \
+              -e 's|^After=default.target|After=multi-user.target|' \
+              -e 's|^WantedBy=default.target|WantedBy=multi-user.target|' \
+            deploy/station-camerad.service > "$root/usr/lib/systemd/system/station-camerad.service"
+
+          cat > "$root/DEBIAN/control" <<EOF
+          Package: station-camerad
+          Version: $version
+          Section: graphics
+          Priority: optional
+          Architecture: arm64
+          Maintainer: IFSCstation
+          Depends: libc6
+          Description: Webcam owner daemon for IFSCstation (SIGG)
+           Captures YUYV via raw V4L2 ioctl + mmap and publishes RGB8 frames into the
+           shared cam_ring at /dev/shm/body_estim_camera. Ships the camerad binary and a
+           system-scope systemd service.
+          EOF
+
+          cat > "$root/usr/share/doc/station-camerad/README.Debian" <<EOF
+          The station-camerad.service system unit is enabled and started on install
+          and stopped/disabled on removal. The user consuming the ring only needs read
+          access to /dev/shm/body_estim_camera (default perms let other users read).
+          EOF
+
+          cat > "$root/DEBIAN/postinst" <<'EOF'
+          #!/bin/sh
+          set -e
+          if [ -d /run/systemd/system ]; then
+            systemctl enable --now station-camerad.service >/dev/null 2>&1 || true
+          fi
+          exit 0
+          EOF
+          chmod 0755 "$root/DEBIAN/postinst"
+
+          cat > "$root/DEBIAN/prerm" <<'EOF'
+          #!/bin/sh
+          set -e
+          if [ -d /run/systemd/system ]; then
+            systemctl disable --now station-camerad.service >/dev/null 2>&1 || true
+          fi
+          exit 0
+          EOF
+          chmod 0755 "$root/DEBIAN/prerm"
+
+          dpkg-deb --build --root-owner-group "$root" \
+            "$RUNNER_TEMP/${pkg}.deb"
+
+      - name: Upload .deb artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: station-camerad-arm64-deb
+          path: "${{ runner.temp }}/station-camerad_*.deb"
+          if-no-files-found: error
