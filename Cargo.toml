@@ -1,0 +1,17 @@
+[package]
+name = "station-camerad"
+version = "0.1.0"
+edition = "2021"
+description = "Webcam owner daemon: captures YUYV and publishes RGB8 frames to the cam_ring"
+license = "MIT"
+
+[lib]
+name = "camerad"
+path = "src/lib.rs"
+
+[[bin]]
+name = "camerad"
+path = "src/bin/camerad.rs"
+
+[dependencies]
+libc = "0.2"
