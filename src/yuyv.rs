@@ -169,7 +169,7 @@ pub fn yuyv_to_rgb8(src: &[u8], dst: &mut [u8], width: usize, height: usize, mir
     assert!(dst.len() >= width * height * 3);
 
     #[cfg(target_arch = "aarch64")]
-    if width >= 4 && width % 4 == 0 && fast_path_available() {
+    if width >= 4 && width.is_multiple_of(4) && fast_path_available() {
         unsafe {
             neon::yuyv_to_rgb8_neon(src, dst, width, height, mirror);
         }
@@ -297,7 +297,7 @@ mod tests {
         };
         let mut mismatches = 0usize;
         for trial in 0..64 {
-            let mut src = vec![0u8; 16 * 2 * 4];
+            let mut src = [0u8; 16 * 2 * 4];
             for b in src.iter_mut() {
                 next(&mut rng);
                 *b = if trial < 16 {
