@@ -66,16 +66,6 @@ mod neon {
     }
 
     #[inline(always)]
-    unsafe fn quantize_trunc(a: int32x4_t) -> uint8x8_t {
-        let sign = vshrq_n_s32(a, 31);
-        let abs = vsubq_s32(veorq_s32(a, sign), sign);
-        let shifted = vshrq_n_s32(abs, 10);
-        let result = veorq_s32(vsubq_s32(shifted, sign), sign);
-        let t16 = vqmovun_s32(result);
-        vqmovn_u16(vcombine_u16(t16, vdup_n_u16(0)))
-    }
-
-    #[inline(always)]
     unsafe fn yu12_2px(y_ptr: *const u8, u_val: u8, v_val: u8, d: *mut u8, rev: bool) {
         let y0 = *y_ptr as i32;
         let y1 = *y_ptr.add(1) as i32;
@@ -252,11 +242,12 @@ fn yuv420_to_rgb8_scalar(
     for row in 0..height {
         let y_row = &y_plane[row * width..][..width];
         let row_base = row * width;
+        let uv_base = (row / 2) * (width / 2);
         let mut uv_idx = 0usize;
         let mut col = 0usize;
         while col < width {
-            let u = u_plane[uv_idx] as i32 - 128;
-            let v = v_plane[uv_idx] as i32 - 128;
+            let u = u_plane[uv_base + uv_idx] as i32 - 128;
+            let v = v_plane[uv_base + uv_idx] as i32 - 128;
             uv_idx += 1;
             let uv_mul_v = K_V_R * v;
             let uv_mul_gv = K_V_G * v;
