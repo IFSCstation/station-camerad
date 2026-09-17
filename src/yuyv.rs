@@ -143,6 +143,44 @@ fn fast_path_available() -> bool {
         && std::arch::is_aarch64_feature_detected!("neon")
 }
 
+fn yuv420_to_rgb8_scalar(
+    y_plane: &[u8],
+    u_plane: &[u8],
+    v_plane: &[u8],
+    dst: &mut [u8],
+    width: usize,
+    height: usize,
+    mirror: bool,
+) {
+    let half_w = width / 2;
+    for row in 0..height {
+        let y_row = &y_plane[row * width..][..width];
+        let uv_row = row / 2;
+        for col in 0..width {
+            let u = u_plane[uv_row * half_w + col / 2] as i32 - 128;
+            let v = v_plane[uv_row * half_w + col / 2] as i32 - 128;
+            let y = y_row[col] as i32;
+            let dx = if mirror { width - 1 - col } else { col };
+            let o = (row * width + dx) * 3;
+            let base = K_Y * (y - 16);
+            dst[o] = clamp8((base + K_V_R * v) / SCALE);
+            dst[o + 1] = clamp8((base - K_V_G * v - K_U_G * u) / SCALE);
+            dst[o + 2] = clamp8((base + K_U_B * u) / SCALE);
+        }
+    }
+}
+
+pub fn yuv420_to_rgb8(src: &[u8], dst: &mut [u8], width: usize, height: usize, mirror: bool) {
+    let y_size = width * height;
+    let uv_size = (width / 2) * (height / 2);
+    assert!(src.len() >= y_size + uv_size * 2);
+    assert!(dst.len() >= width * height * 3);
+    let y_plane = &src[..y_size];
+    let u_plane = &src[y_size..][..uv_size];
+    let v_plane = &src[y_size + uv_size..][..uv_size];
+    yuv420_to_rgb8_scalar(y_plane, u_plane, v_plane, dst, width, height, mirror);
+}
+
 pub fn rgb24_to_rgb8(src: &[u8], dst: &mut [u8], width: usize, height: usize, mirror: bool) {
     assert!(src.len() >= width * height * 3);
     assert!(dst.len() >= width * height * 3);

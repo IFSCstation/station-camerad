@@ -10,6 +10,7 @@ const V4L2_MEMORY_MMAP: u32 = 1;
 const V4L2_FIELD_ANY: u32 = 0;
 pub const V4L2_PIX_FMT_YUYV: u32 = 0x5659_5559;
 pub const V4L2_PIX_FMT_RGB24: u32 = 0x3342_4752;
+pub const V4L2_PIX_FMT_YUV420: u32 = 0x3231_5559;
 const V4L2_CAP_VIDEO_CAPTURE: u32 = 0x0000_0001;
 const V4L2_CAP_STREAMING: u32 = 0x0400_0000;
 const NUM_BUFFERS: u32 = 4;
@@ -234,13 +235,20 @@ impl Camera {
         let mut gy: V4l2Format = unsafe { std::mem::zeroed() };
         gy.type_ = V4L2_BUF_TYPE_VIDEO_CAPTURE;
         ioctl!(fd.as_raw_fd(), VIDIOC_G_FMT, &mut gy);
-        if gy.pix.pixelformat != V4L2_PIX_FMT_YUYV {
-            return Err(unsupported("camera provides neither RGB24 nor YUYV"));
+        if gy.pix.pixelformat == V4L2_PIX_FMT_YUYV && gy.pix.width != 0 && gy.pix.height != 0 {
+            return Ok((gy.pix.width, gy.pix.height, V4L2_PIX_FMT_YUYV));
         }
-        if gy.pix.width == 0 || gy.pix.height == 0 {
+        Self::try_set(fd, V4L2_PIX_FMT_YUV420)?;
+        let mut gi: V4l2Format = unsafe { std::mem::zeroed() };
+        gi.type_ = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+        ioctl!(fd.as_raw_fd(), VIDIOC_G_FMT, &mut gi);
+        if gi.pix.pixelformat != V4L2_PIX_FMT_YUV420 {
+            return Err(unsupported("camera provides neither RGB24, YUYV, nor YU12"));
+        }
+        if gi.pix.width == 0 || gi.pix.height == 0 {
             return Err(unsupported("camera reported a zero-size frame"));
         }
-        Ok((gy.pix.width, gy.pix.height, V4L2_PIX_FMT_YUYV))
+        Ok((gi.pix.width, gi.pix.height, V4L2_PIX_FMT_YUV420))
     }
 
     fn try_set(fd: &OwnedFd, fmtc: u32) -> io::Result<()> {
