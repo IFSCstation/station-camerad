@@ -224,21 +224,21 @@ impl Camera {
         let mut fmt: V4l2Format = unsafe { std::mem::zeroed() };
         fmt.type_ = V4L2_BUF_TYPE_VIDEO_CAPTURE;
         ioctl!(fd.as_raw_fd(), VIDIOC_G_FMT, &mut fmt);
-        Self::try_set(fd, V4L2_PIX_FMT_RGB24)?;
+        Self::try_set(fd, V4L2_PIX_FMT_RGB24);
         let mut gf: V4l2Format = unsafe { std::mem::zeroed() };
         gf.type_ = V4L2_BUF_TYPE_VIDEO_CAPTURE;
         ioctl!(fd.as_raw_fd(), VIDIOC_G_FMT, &mut gf);
         if gf.pix.pixelformat == V4L2_PIX_FMT_RGB24 && gf.pix.width != 0 && gf.pix.height != 0 {
             return Ok((gf.pix.width, gf.pix.height, V4L2_PIX_FMT_RGB24));
         }
-        Self::try_set(fd, V4L2_PIX_FMT_YUYV)?;
+        Self::try_set(fd, V4L2_PIX_FMT_YUYV);
         let mut gy: V4l2Format = unsafe { std::mem::zeroed() };
         gy.type_ = V4L2_BUF_TYPE_VIDEO_CAPTURE;
         ioctl!(fd.as_raw_fd(), VIDIOC_G_FMT, &mut gy);
         if gy.pix.pixelformat == V4L2_PIX_FMT_YUYV && gy.pix.width != 0 && gy.pix.height != 0 {
             return Ok((gy.pix.width, gy.pix.height, V4L2_PIX_FMT_YUYV));
         }
-        Self::try_set(fd, V4L2_PIX_FMT_YUV420)?;
+        Self::try_set(fd, V4L2_PIX_FMT_YUV420);
         let mut gi: V4l2Format = unsafe { std::mem::zeroed() };
         gi.type_ = V4L2_BUF_TYPE_VIDEO_CAPTURE;
         ioctl!(fd.as_raw_fd(), VIDIOC_G_FMT, &mut gi);
@@ -251,12 +251,18 @@ impl Camera {
         Ok((gi.pix.width, gi.pix.height, V4L2_PIX_FMT_YUV420))
     }
 
-    fn try_set(fd: &OwnedFd, fmtc: u32) -> io::Result<()> {
+    fn try_set(fd: &OwnedFd, fmtc: u32) {
         let mut nf: V4l2Format = unsafe { std::mem::zeroed() };
         nf.type_ = V4L2_BUF_TYPE_VIDEO_CAPTURE;
         let mut gf: V4l2Format = unsafe { std::mem::zeroed() };
         gf.type_ = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-        ioctl!(fd.as_raw_fd(), VIDIOC_G_FMT, &mut gf);
+        let _ = unsafe {
+            ioctl_ret(
+                fd.as_raw_fd(),
+                VIDIOC_G_FMT,
+                &mut gf as *mut _ as *mut libc::c_void,
+            )
+        };
         nf.pix.width = if gf.pix.width == 0 { 640 } else { gf.pix.width };
         nf.pix.height = if gf.pix.height == 0 {
             480
@@ -265,8 +271,13 @@ impl Camera {
         };
         nf.pix.pixelformat = fmtc;
         nf.pix.field = V4L2_FIELD_ANY;
-        ioctl!(fd.as_raw_fd(), VIDIOC_S_FMT, &mut nf);
-        Ok(())
+        let _ = unsafe {
+            ioctl_ret(
+                fd.as_raw_fd(),
+                VIDIOC_S_FMT,
+                &mut nf as *mut _ as *mut libc::c_void,
+            )
+        };
     }
 
     fn setup_buffers(fd: &OwnedFd) -> io::Result<Vec<MappedBuffer>> {
