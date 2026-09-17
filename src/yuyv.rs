@@ -1,4 +1,3 @@
-const SCALE: i32 = 1024;
 const K_Y: i32 = 1192;
 const K_V_R: i32 = 1634;
 const K_V_G: i32 = 833;
@@ -9,11 +8,22 @@ fn clamp8(v: i32) -> u8 {
     v.clamp(0, 255) as u8
 }
 
+fn div_scale(v: i32) -> i32 {
+    let neg = v < 0;
+    let abs = if neg { -v } else { v };
+    let q = (abs as u32 >> 10) as i32;
+    if neg {
+        -q
+    } else {
+        q
+    }
+}
+
 fn convert(y: i32, u: i32, v: i32) -> [u8; 3] {
     let base = K_Y * (y - 16);
-    let r = (base + K_V_R * v) / SCALE;
-    let g = (base - K_V_G * v - K_U_G * u) / SCALE;
-    let b = (base + K_U_B * u) / SCALE;
+    let r = div_scale(base + K_V_R * v);
+    let g = div_scale(base - K_V_G * v - K_U_G * u);
+    let b = div_scale(base + K_U_B * u);
     [clamp8(r), clamp8(g), clamp8(b)]
 }
 
@@ -152,10 +162,8 @@ fn yuv420_to_rgb8_scalar(
     height: usize,
     mirror: bool,
 ) {
-    let half_w = width / 2;
     for row in 0..height {
         let y_row = &y_plane[row * width..][..width];
-        let uv_off = (row / 2) * half_w;
         let row_base = row * width;
         let mut uv_idx = 0usize;
         let mut col = 0usize;
@@ -179,9 +187,9 @@ fn yuv420_to_rgb8_scalar(
                 };
                 let o = (row_base + dx) * 3;
                 let base = K_Y * (y - 16);
-                dst[o] = clamp8((base + uv_mul_v) / SCALE);
-                dst[o + 1] = clamp8((base - uv_mul_gv - uv_mul_gu) / SCALE);
-                dst[o + 2] = clamp8((base + uv_mul_b) / SCALE);
+                dst[o] = clamp8(div_scale(base + uv_mul_v));
+                dst[o + 1] = clamp8(div_scale(base - uv_mul_gv - uv_mul_gu));
+                dst[o + 2] = clamp8(div_scale(base + uv_mul_b));
             }
             col += 2;
         }
