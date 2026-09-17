@@ -66,18 +66,30 @@ mod neon {
     }
 
     #[inline(always)]
+    unsafe fn quantize_trunc(a: int32x4_t) -> uint8x8_t {
+        let sign = vshrq_n_s32(a, 31);
+        let abs = vsubq_s32(veorq_s32(a, sign), sign);
+        let shifted = vshrq_n_s32(abs, 10);
+        let result = veorq_s32(vsubq_s32(shifted, sign), sign);
+        let t16 = vqmovun_s32(result);
+        vqmovn_u16(vcombine_u16(t16, vdup_n_u16(0)))
+    }
+
+    #[inline(always)]
     unsafe fn yu12_4px(y_ptr: *const u8, u_val: u8, v_val: u8, d: *mut u8, rev: bool) {
         let y8 = vld1_u8(y_ptr);
         let y_s16 = vsubq_s16(vreinterpretq_s16_u16(vmovl_u8(y8)), vdupq_n_s16(16));
         let y32 = vmovl_s16(vget_low_s16(y_s16));
 
-        let u32 = vsubq_s32(vmovl_s16(vdup_n_s16(u_val as i16)), vdupq_n_s32(128));
-        let v32 = vsubq_s32(vmovl_s16(vdup_n_s16(v_val as i16)), vdupq_n_s32(128));
+        let u16x = vreinterpretq_s16_u16(vsubq_u16(vdupq_n_u16(u_val as u16), vdupq_n_u16(128)));
+        let v16x = vreinterpretq_s16_u16(vsubq_u16(vdupq_n_u16(v_val as u16), vdupq_n_u16(128)));
+        let u32 = vmovl_s16(vget_low_s16(u16x));
+        let v32 = vmovl_s16(vget_low_s16(v16x));
 
         let base = vmulq_s32(y32, vdupq_n_s32(K_Y));
-        let r = quantize(vmlaq_n_s32(base, v32, K_V_R));
-        let g = quantize(vmlsq_n_s32(vmlsq_n_s32(base, v32, K_V_G), u32, K_U_G));
-        let b_out = quantize(vmlaq_n_s32(base, u32, K_U_B));
+        let r = quantize_trunc(vmlaq_n_s32(base, v32, K_V_R));
+        let g = quantize_trunc(vmlsq_n_s32(vmlsq_n_s32(base, v32, K_V_G), u32, K_U_G));
+        let b_out = quantize_trunc(vmlaq_n_s32(base, u32, K_U_B));
 
         if rev {
             *d = vget_lane_u8(r, 3);
