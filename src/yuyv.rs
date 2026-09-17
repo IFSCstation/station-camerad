@@ -66,6 +66,49 @@ mod neon {
     }
 
     #[inline(always)]
+    unsafe fn yu12_4px(y_ptr: *const u8, u_val: u8, v_val: u8, d: *mut u8, rev: bool) {
+        let y8 = vld1_u8(y_ptr);
+        let y_s16 = vsubq_s16(vreinterpretq_s16_u16(vmovl_u8(y8)), vdupq_n_s16(16));
+        let y32 = vmovl_s16(vget_low_s16(y_s16));
+
+        let u32 = vsubq_s32(vmovl_s16(vdup_n_s16(u_val as i16)), vdupq_n_s32(128));
+        let v32 = vsubq_s32(vmovl_s16(vdup_n_s16(v_val as i16)), vdupq_n_s32(128));
+
+        let base = vmulq_s32(y32, vdupq_n_s32(K_Y));
+        let r = quantize(vmlaq_n_s32(base, v32, K_V_R));
+        let g = quantize(vmlsq_n_s32(vmlsq_n_s32(base, v32, K_V_G), u32, K_U_G));
+        let b_out = quantize(vmlaq_n_s32(base, u32, K_U_B));
+
+        if rev {
+            *d = vget_lane_u8(r, 3);
+            *d.add(1) = vget_lane_u8(g, 3);
+            *d.add(2) = vget_lane_u8(b_out, 3);
+            *d.add(3) = vget_lane_u8(r, 2);
+            *d.add(4) = vget_lane_u8(g, 2);
+            *d.add(5) = vget_lane_u8(b_out, 2);
+            *d.add(6) = vget_lane_u8(r, 1);
+            *d.add(7) = vget_lane_u8(g, 1);
+            *d.add(8) = vget_lane_u8(b_out, 1);
+            *d.add(9) = vget_lane_u8(r, 0);
+            *d.add(10) = vget_lane_u8(g, 0);
+            *d.add(11) = vget_lane_u8(b_out, 0);
+        } else {
+            *d = vget_lane_u8(r, 0);
+            *d.add(1) = vget_lane_u8(g, 0);
+            *d.add(2) = vget_lane_u8(b_out, 0);
+            *d.add(3) = vget_lane_u8(r, 1);
+            *d.add(4) = vget_lane_u8(g, 1);
+            *d.add(5) = vget_lane_u8(b_out, 1);
+            *d.add(6) = vget_lane_u8(r, 2);
+            *d.add(7) = vget_lane_u8(g, 2);
+            *d.add(8) = vget_lane_u8(b_out, 2);
+            *d.add(9) = vget_lane_u8(r, 3);
+            *d.add(10) = vget_lane_u8(g, 3);
+            *d.add(11) = vget_lane_u8(b_out, 3);
+        }
+    }
+
+    #[inline(always)]
     unsafe fn yuyv_4px(s: *const u8, d: *mut u8, rev: bool) {
         let b = vld1_u8(s);
         let uzp = vuzp_u8(b, b);
@@ -155,8 +198,7 @@ mod neon {
         height: usize,
         mirror: bool,
     ) {
-        let pixel_groups = width / 8;
-        let remainder = width % 8;
+        let groups = width / 4;
         for row in 0..height {
             let y_row = y_plane.add(row * width);
             let uv_row = row / 2;
@@ -164,115 +206,20 @@ mod neon {
             let v_row = v_plane.add(uv_row * (width / 2));
             let row_out = dst.add(row * width * 3);
 
-            for g in 0..pixel_groups {
-                let yi = g * 8;
-                let ui = g * 4;
+            for g in 0..groups {
+                let yi = g * 4;
+                let ui = g * 2;
+                let u_val = *u_row.add(ui);
+                let v_val = *v_row.add(ui);
                 let di = if mirror {
-                    (pixel_groups - 1 - g) * 24
+                    (groups - 1 - g) * 12
                 } else {
-                    g * 24
+                    g * 12
                 };
-
-                let y8 = vld1q_u8(y_row.add(yi));
-                let u4 = vld1_u8(u_row.add(ui));
-                let v4 = vld1_u8(v_row.add(ui));
-
-                let u8_lo = vcombine_u8(u4, u4);
-                let u8_all = vuzp1q_u8(u8_lo, u8_lo);
-                let v8_lo = vcombine_u8(v4, v4);
-                let v8_all = vuzp1q_u8(v8_lo, v8_lo);
-
-                let y_s16 =
-                    vreinterpretq_s16_u16(vsubq_u16(vmovl_u8(vget_low_u8(y8)), vdupq_n_u16(16)));
-                let u_s16 =
-                    vreinterpretq_s16_u16(vsubq_u16(vmovl_u8(vget_low_u8(u8_all)), vdupq_n_u16(128)));
-                let v_s16 =
-                    vreinterpretq_s16_u16(vsubq_u16(vmovl_u8(vget_low_u8(v8_all)), vdupq_n_u16(128)));
-
-                let y_lo = vmovl_s16(vget_low_s16(y_s16));
-                let y_hi = vmovl_s16(vget_high_s16(y_s16));
-                let u_lo = vmovl_s16(vget_low_s16(u_s16));
-                let u_hi = vmovl_s16(vget_high_s16(u_s16));
-                let v_lo = vmovl_s16(vget_low_s16(v_s16));
-                let v_hi = vmovl_s16(vget_high_s16(v_s16));
-
-                let base_lo = vmulq_s32(y_lo, vdupq_n_s32(K_Y));
-                let base_hi = vmulq_s32(y_hi, vdupq_n_s32(K_Y));
-
-                let r_lo = quantize(vmlaq_n_s32(base_lo, v_lo, K_V_R));
-                let r_hi = quantize(vmlaq_n_s32(base_hi, v_hi, K_V_R));
-                let g_lo = quantize(vmlsq_n_s32(vmlsq_n_s32(base_lo, v_lo, K_V_G), u_lo, K_U_G));
-                let g_hi = quantize(vmlsq_n_s32(vmlsq_n_s32(base_hi, v_hi, K_V_G), u_hi, K_U_G));
-                let b_lo = quantize(vmlaq_n_s32(base_lo, u_lo, K_U_B));
-                let b_hi = quantize(vmlaq_n_s32(base_hi, u_hi, K_U_B));
-
-                let r8 = vcombine_u8(r_lo, r_hi);
-                let g8 = vcombine_u8(g_lo, g_hi);
-                let b8 = vcombine_u8(b_lo, b_hi);
-
-                let (r8, g8, b8) = if mirror {
-                    let r8 = vrev64q_u8(r8);
-                    let r8 = vrev32q_u8(r8);
-                    let g8 = vrev64q_u8(g8);
-                    let g8 = vrev32q_u8(g8);
-                    let b8 = vrev64q_u8(b8);
-                    let b8 = vrev32q_u8(b8);
-                    (r8, g8, b8)
-                } else {
-                    (r8, g8, b8)
-                };
-
-                let o0 = vgetq_lane_u8(r8, 0);
-                let o1 = vgetq_lane_u8(g8, 0);
-                let o2 = vgetq_lane_u8(b8, 0);
-                let o3 = vgetq_lane_u8(r8, 1);
-                let o4 = vgetq_lane_u8(g8, 1);
-                let o5 = vgetq_lane_u8(b8, 1);
-                *row_out.add(di) = o0;
-                *row_out.add(di + 1) = o1;
-                *row_out.add(di + 2) = o2;
-                *row_out.add(di + 3) = o3;
-                *row_out.add(di + 4) = o4;
-                *row_out.add(di + 5) = o5;
-                let o6 = vgetq_lane_u8(r8, 2);
-                let o7 = vgetq_lane_u8(g8, 2);
-                let o8 = vgetq_lane_u8(b8, 2);
-                let o9 = vgetq_lane_u8(r8, 3);
-                let o10 = vgetq_lane_u8(g8, 3);
-                let o11 = vgetq_lane_u8(b8, 3);
-                *row_out.add(di + 6) = o6;
-                *row_out.add(di + 7) = o7;
-                *row_out.add(di + 8) = o8;
-                *row_out.add(di + 9) = o9;
-                *row_out.add(di + 10) = o10;
-                *row_out.add(di + 11) = o11;
-                let o12 = vgetq_lane_u8(r8, 4);
-                let o13 = vgetq_lane_u8(g8, 4);
-                let o14 = vgetq_lane_u8(b8, 4);
-                let o15 = vgetq_lane_u8(r8, 5);
-                let o16 = vgetq_lane_u8(g8, 5);
-                let o17 = vgetq_lane_u8(b8, 5);
-                *row_out.add(di + 12) = o12;
-                *row_out.add(di + 13) = o13;
-                *row_out.add(di + 14) = o14;
-                *row_out.add(di + 15) = o15;
-                *row_out.add(di + 16) = o16;
-                *row_out.add(di + 17) = o17;
-                let o18 = vgetq_lane_u8(r8, 6);
-                let o19 = vgetq_lane_u8(g8, 6);
-                let o20 = vgetq_lane_u8(b8, 6);
-                let o21 = vgetq_lane_u8(r8, 7);
-                let o22 = vgetq_lane_u8(g8, 7);
-                let o23 = vgetq_lane_u8(b8, 7);
-                *row_out.add(di + 18) = o18;
-                *row_out.add(di + 19) = o19;
-                *row_out.add(di + 20) = o20;
-                *row_out.add(di + 21) = o21;
-                *row_out.add(di + 22) = o22;
-                *row_out.add(di + 23) = o23;
+                yu12_4px(y_row.add(yi), u_val, v_val, row_out.add(di), mirror);
             }
 
-            let col_start = pixel_groups * 8;
+            let col_start = groups * 4;
             let mut uv_idx = col_start / 2;
             let mut col = col_start;
             while col < width {
