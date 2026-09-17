@@ -143,6 +143,26 @@ fn fast_path_available() -> bool {
         && std::arch::is_aarch64_feature_detected!("neon")
 }
 
+pub fn rgb24_to_rgb8(src: &[u8], dst: &mut [u8], width: usize, height: usize, mirror: bool) {
+    assert!(src.len() >= width * height * 3);
+    assert!(dst.len() >= width * height * 3);
+    if !mirror {
+        dst[..src.len()].copy_from_slice(src);
+        return;
+    }
+    for y in 0..height {
+        let row_in = &src[y * width * 3..][..width * 3];
+        let row_out = &mut dst[y * width * 3..][..width * 3];
+        for x in 0..width {
+            let si = x * 3;
+            let di = (width - 1 - x) * 3;
+            row_out[di] = row_in[si];
+            row_out[di + 1] = row_in[si + 1];
+            row_out[di + 2] = row_in[si + 2];
+        }
+    }
+}
+
 pub fn yuyv_to_rgb8(src: &[u8], dst: &mut [u8], width: usize, height: usize, mirror: bool) {
     assert_eq!(width % 2, 0);
     assert!(src.len() >= width * height * 2);
@@ -161,6 +181,36 @@ pub fn yuyv_to_rgb8(src: &[u8], dst: &mut [u8], width: usize, height: usize, mir
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rgb24_passthrough_no_mirror() {
+        let src: Vec<u8> = (0..24).collect();
+        let mut dst = vec![0u8; 24];
+        rgb24_to_rgb8(&src, &mut dst, 2, 1, false);
+        assert_eq!(dst, src);
+    }
+
+    #[test]
+    fn rgb24_mirror_reverses_row() {
+        let src = vec![1u8, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
+        let mut dst = vec![0u8; 12];
+        rgb24_to_rgb8(&src, &mut dst, 4, 1, true);
+        assert_eq!(&dst[0..3], &[10, 11, 12]);
+        assert_eq!(&dst[3..6], &[7, 8, 9]);
+        assert_eq!(&dst[6..9], &[4, 5, 6]);
+        assert_eq!(&dst[9..12], &[1, 2, 3]);
+    }
+
+    #[test]
+    fn rgb24_mirror_multi_row() {
+        let src: Vec<u8> = (0..24).collect();
+        let mut dst = vec![0u8; 24];
+        rgb24_to_rgb8(&src, &mut dst, 2, 2, true);
+        assert_eq!(&dst[0..3], &[3, 4, 5]);
+        assert_eq!(&dst[3..6], &[0, 1, 2]);
+        assert_eq!(&dst[6..9], &[9, 10, 11]);
+        assert_eq!(&dst[9..12], &[6, 7, 8]);
+    }
 
     #[test]
     fn gray_is_gray() {

@@ -8,7 +8,8 @@ use libc::{MAP_FAILED, MAP_SHARED, PROT_READ, PROT_WRITE};
 const V4L2_BUF_TYPE_VIDEO_CAPTURE: u32 = 1;
 const V4L2_MEMORY_MMAP: u32 = 1;
 const V4L2_FIELD_ANY: u32 = 0;
-const V4L2_PIX_FMT_YUYV: u32 = 0x5659_5559;
+pub const V4L2_PIX_FMT_YUYV: u32 = 0x5659_5559;
+pub const V4L2_PIX_FMT_RGB24: u32 = 0x3342_4752;
 const V4L2_CAP_VIDEO_CAPTURE: u32 = 0x0000_0001;
 const V4L2_CAP_STREAMING: u32 = 0x0400_0000;
 const NUM_BUFFERS: u32 = 4;
@@ -173,6 +174,7 @@ pub struct Camera {
     buffers: Vec<MappedBuffer>,
     width: u32,
     height: u32,
+    pixel_format: u32,
     last_index: usize,
     last_bytesused: usize,
 }
@@ -201,7 +203,7 @@ impl Camera {
             )));
         }
 
-        let (width, height) = Self::negotiate_format(&fd)?;
+        let (width, height, pixel_format) = Self::negotiate_format(&fd)?;
         let buffers = Self::setup_buffers(&fd)?;
 
         let mut camera = Camera {
@@ -209,6 +211,7 @@ impl Camera {
             buffers,
             width,
             height,
+            pixel_format,
             last_index: 0,
             last_bytesused: 0,
         };
@@ -216,37 +219,46 @@ impl Camera {
         Ok(camera)
     }
 
-    fn negotiate_format(fd: &OwnedFd) -> io::Result<(u32, u32)> {
+    fn negotiate_format(fd: &OwnedFd) -> io::Result<(u32, u32, u32)> {
         let mut fmt: V4l2Format = unsafe { std::mem::zeroed() };
         fmt.type_ = V4L2_BUF_TYPE_VIDEO_CAPTURE;
         ioctl!(fd.as_raw_fd(), VIDIOC_G_FMT, &mut fmt);
-        if fmt.pix.pixelformat != V4L2_PIX_FMT_YUYV || fmt.pix.width == 0 || fmt.pix.height == 0 {
-            let mut nf: V4l2Format = unsafe { std::mem::zeroed() };
-            nf.type_ = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-            nf.pix.width = if fmt.pix.width == 0 {
-                640
-            } else {
-                fmt.pix.width
-            };
-            nf.pix.height = if fmt.pix.height == 0 {
-                480
-            } else {
-                fmt.pix.height
-            };
-            nf.pix.pixelformat = V4L2_PIX_FMT_YUYV;
-            nf.pix.field = V4L2_FIELD_ANY;
-            ioctl!(fd.as_raw_fd(), VIDIOC_S_FMT, &mut nf);
-        }
+        Self::try_set(fd, V4L2_PIX_FMT_RGB24)?;
         let mut gf: V4l2Format = unsafe { std::mem::zeroed() };
         gf.type_ = V4L2_BUF_TYPE_VIDEO_CAPTURE;
         ioctl!(fd.as_raw_fd(), VIDIOC_G_FMT, &mut gf);
-        if gf.pix.pixelformat != V4L2_PIX_FMT_YUYV {
-            return Err(unsupported("camera does not provide YUYV (4:2:2) frames"));
+        if gf.pix.pixelformat == V4L2_PIX_FMT_RGB24 && gf.pix.width != 0 && gf.pix.height != 0 {
+            return Ok((gf.pix.width, gf.pix.height, V4L2_PIX_FMT_RGB24));
         }
-        if gf.pix.width == 0 || gf.pix.height == 0 {
+        Self::try_set(fd, V4L2_PIX_FMT_YUYV)?;
+        let mut gy: V4l2Format = unsafe { std::mem::zeroed() };
+        gy.type_ = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+        ioctl!(fd.as_raw_fd(), VIDIOC_G_FMT, &mut gy);
+        if gy.pix.pixelformat != V4L2_PIX_FMT_YUYV {
+            return Err(unsupported("camera provides neither RGB24 nor YUYV"));
+        }
+        if gy.pix.width == 0 || gy.pix.height == 0 {
             return Err(unsupported("camera reported a zero-size frame"));
         }
-        Ok((gf.pix.width, gf.pix.height))
+        Ok((gy.pix.width, gy.pix.height, V4L2_PIX_FMT_YUYV))
+    }
+
+    fn try_set(fd: &OwnedFd, fmtc: u32) -> io::Result<()> {
+        let mut nf: V4l2Format = unsafe { std::mem::zeroed() };
+        nf.type_ = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+        let mut gf: V4l2Format = unsafe { std::mem::zeroed() };
+        gf.type_ = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+        ioctl!(fd.as_raw_fd(), VIDIOC_G_FMT, &mut gf);
+        nf.pix.width = if gf.pix.width == 0 { 640 } else { gf.pix.width };
+        nf.pix.height = if gf.pix.height == 0 {
+            480
+        } else {
+            gf.pix.height
+        };
+        nf.pix.pixelformat = fmtc;
+        nf.pix.field = V4L2_FIELD_ANY;
+        ioctl!(fd.as_raw_fd(), VIDIOC_S_FMT, &mut nf);
+        Ok(())
     }
 
     fn setup_buffers(fd: &OwnedFd) -> io::Result<Vec<MappedBuffer>> {
@@ -307,6 +319,10 @@ impl Camera {
 
     pub fn height(&self) -> u32 {
         self.height
+    }
+
+    pub fn pixel_format(&self) -> u32 {
+        self.pixel_format
     }
 
     pub fn dequeue(&mut self) -> io::Result<()> {

@@ -6,16 +6,20 @@ Guidance for AI agents / humans working in this repo.
 
 `station-camerad` is a drop-in Rust replacement for
 `old_layout_ignore/webcam_test/python/camera_feeder.py`. It is the **sole owner
-of the webcam**: it captures YUYV via raw V4L2 ioctl + mmap, converts to RGB8
-in one pass (mirror folded in), and publishes into the shared camera ring at
-`/dev/shm/body_estim_camera`.
+of the webcam**. To keep the feeder lean on the Pi's single A72 core it
+**never performs format conversion unless the camera forces it**: it
+negotiates `V4L2_PIX_FMT_RGB24` ("RGB3", memory order R,G,B) first for
+zero-copy passthrough, and only falls back to YUYV (4:2:2) + in-repo
+conversion (mirror folded in) when the device offers nothing better. It
+publishes into the shared camera ring at `/dev/shm/body_estim_camera`.
 
 The ring protocol — 64-byte LE header `<IIIIIIIIQ`, magic `0xCAC00001`,
 fmt=1 (RGB8), payload at `64 + (seq % 3) * slot_size` — **must stay
-byte-compatible**. Source of truth:
-`old_layout_ignore/webcam_test/python/cam_ring.py`. Consumers (Godot
-GDExtension, Python tracker) read it unchanged; changing the layout silently
-breaks them.
+byte-compatible**. RGB24 passthrough is byte-compatible by construction
+(3 bytes/pixel, R,G,B in the same order as our RGB8), so it never changes the
+layout. Source of truth: `old_layout_ignore/webcam_test/python/cam_ring.py`.
+Consumers (Godot GDExtension, native tracker port) read it unchanged; changing
+the layout silently breaks them.
 
 ## Layout
 
@@ -33,8 +37,11 @@ breaks them.
    no bindgen-generated structs for V4L2.
 2. **No kernel interference.** Userspace V4L2 client only: ioctls on the
    device fd + mmap. No module loading, sysfs writes, or v4l2loopback setup.
-3. **YUYV only.** The port targets loopback + droidcam devices which are
-   YUYV-only. Do not add MJPEG.
+3. **Negotiate, don't convert.** Ask for `V4L2_PIX_FMT_RGB24` ("RGB3", memory
+   order R,G,B) first — zero-copy passthrough, mirror folded in as a cheap
+   per-row group reversal. Fall back to YUYV (4:2:2) + in-repo conversion
+   **only when the device offers nothing better** (strictly necessary). Keep
+   the NEON kernel for that path. Do not add MJPEG.
 4. **Keep the ring byte-compatible.** Header offsets, magic, ordering
    (payload then seq after a Release fence + volatile store) never change.
 5. **Pass the gates before finishing.**

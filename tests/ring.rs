@@ -108,6 +108,48 @@ fn yuyv_frame_lands_in_ring_slot() {
 }
 
 #[test]
+fn rgb24_frame_lands_in_ring_slot() {
+    let p = temp_ring("rgb24");
+    let width = 4usize;
+    let height = 2usize;
+    let rgb24_frame: Vec<u8> = (0..(width * height * 3))
+        .map(|i| (i * 7 + 3) as u8)
+        .collect();
+    {
+        let mut w = CameraRingWriter::new(&p, width as u32, height as u32, 3).unwrap();
+        w.submit_with(|dst| {
+            camerad::yuyv::rgb24_to_rgb8(&rgb24_frame, dst, width, height, false);
+        });
+    }
+    let b = fs::read(&p).unwrap();
+    let off = HEADER_BYTES + (width * height * 3);
+    assert_eq!(&b[off..off + rgb24_frame.len()], &rgb24_frame[..]);
+    let _ = fs::remove_file(&p);
+}
+
+#[test]
+fn rgb24_mirror_frame_lands_in_ring_slot() {
+    let p = temp_ring("rgb24mir");
+    let width = 4usize;
+    let height = 1usize;
+    let rgb24_frame: Vec<u8> = (0..12).collect();
+    {
+        let mut w = CameraRingWriter::new(&p, width as u32, height as u32, 3).unwrap();
+        w.submit_with(|dst| {
+            camerad::yuyv::rgb24_to_rgb8(&rgb24_frame, dst, width, height, true);
+        });
+    }
+    let b = fs::read(&p).unwrap();
+    let mut expect = vec![0u8; width * height * 3];
+    camerad::yuyv::rgb24_to_rgb8(&rgb24_frame, &mut expect, width, height, true);
+    let slot_size = width * height * 3;
+    let slot = 1u64;
+    let off = HEADER_BYTES + (slot % 3) as usize * slot_size;
+    assert_eq!(&b[off..off + expect.len()], &expect[..]);
+    let _ = fs::remove_file(&p);
+}
+
+#[test]
 fn rejects_zero_geometry() {
     assert!(CameraRingWriter::new(&temp_ring("zero"), 0, 1, 3).is_err());
     assert!(CameraRingWriter::new(&temp_ring("zero"), 1, 0, 3).is_err());

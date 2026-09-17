@@ -2,7 +2,7 @@
 name = "station-camerad"
 version = "0.1.0"
 edition = "2021"
-description = "Webcam owner daemon: captures YUYV and publishes RGB8 frames to the cam_ring"
+description = "Webcam owner daemon: publishes RGB8 frames to the cam_ring (RGB24 passthrough or YUYV conversion)"
 license = "MIT"
 
 [lib]

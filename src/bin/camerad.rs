@@ -7,7 +7,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use camerad::ring::{CameraRingWriter, CAM_RING_DEFAULT};
-use camerad::v4l2::Camera;
+use camerad::v4l2::{Camera, V4L2_PIX_FMT_RGB24};
 use camerad::yuyv;
 
 static STOP: AtomicBool = AtomicBool::new(false);
@@ -114,9 +114,16 @@ fn run(args: &Args) -> io::Result<()> {
     let mut camera = Camera::open(&device)
         .map_err(|e| io::Error::other(format!("could not open camera {:?}: {e}", args.camera)))?;
     let (fw, fh) = (camera.width(), camera.height());
+    let is_rgb24 = camera.pixel_format() == V4L2_PIX_FMT_RGB24;
     if args.log {
+        let fmt_tag = if is_rgb24 { "RGB24" } else { "YUYV" };
+        let mode = if is_rgb24 {
+            "passthrough"
+        } else {
+            "YUYV→RGB8"
+        };
         println!(
-            "[feeder] camera {} -> {}x{}  ring={}",
+            "[feeder] camera {} -> {}x{} {fmt_tag} ({mode})  ring={}",
             args.camera, fw, fh, args.path
         );
     }
@@ -154,7 +161,11 @@ fn run(args: &Args) -> io::Result<()> {
         }
 
         ring.submit_with(|dst| {
-            yuyv::yuyv_to_rgb8(camera.frame(), dst, fw as usize, fh as usize, args.mirror);
+            if is_rgb24 {
+                yuyv::rgb24_to_rgb8(camera.frame(), dst, fw as usize, fh as usize, args.mirror);
+            } else {
+                yuyv::yuyv_to_rgb8(camera.frame(), dst, fw as usize, fh as usize, args.mirror);
+            }
         });
         camera.release()?;
 
