@@ -76,47 +76,33 @@ mod neon {
     }
 
     #[inline(always)]
-    unsafe fn yu12_4px(y_ptr: *const u8, u_val: u8, v_val: u8, d: *mut u8, rev: bool) {
-        let y8 = vld1_u8(y_ptr);
-        let y_s16 = vsubq_s16(vreinterpretq_s16_u16(vmovl_u8(y8)), vdupq_n_s16(16));
-        let y32 = vmovl_s16(vget_low_s16(y_s16));
-
-        let u16x = vreinterpretq_s16_u16(vsubq_u16(vdupq_n_u16(u_val as u16), vdupq_n_u16(128)));
-        let v16x = vreinterpretq_s16_u16(vsubq_u16(vdupq_n_u16(v_val as u16), vdupq_n_u16(128)));
-        let u32 = vmovl_s16(vget_low_s16(u16x));
-        let v32 = vmovl_s16(vget_low_s16(v16x));
-
-        let base = vmulq_s32(y32, vdupq_n_s32(K_Y));
-        let r = quantize_trunc(vmlaq_n_s32(base, v32, K_V_R));
-        let g = quantize_trunc(vmlsq_n_s32(vmlsq_n_s32(base, v32, K_V_G), u32, K_U_G));
-        let b_out = quantize_trunc(vmlaq_n_s32(base, u32, K_U_B));
-
+    unsafe fn yu12_2px(y_ptr: *const u8, u_val: u8, v_val: u8, d: *mut u8, rev: bool) {
+        let y0 = *y_ptr as i32;
+        let y1 = *y_ptr.add(1) as i32;
+        let u = u_val as i32 - 128;
+        let v = v_val as i32 - 128;
+        let base0 = K_Y * (y0 - 16);
+        let base1 = K_Y * (y1 - 16);
+        let r0 = clamp8(div_scale(base0 + K_V_R * v));
+        let g0 = clamp8(div_scale(base0 - K_V_G * v - K_U_G * u));
+        let b0 = clamp8(div_scale(base0 + K_U_B * u));
+        let r1 = clamp8(div_scale(base1 + K_V_R * v));
+        let g1 = clamp8(div_scale(base1 - K_V_G * v - K_U_G * u));
+        let b1 = clamp8(div_scale(base1 + K_U_B * u));
         if rev {
-            *d = vget_lane_u8(r, 3);
-            *d.add(1) = vget_lane_u8(g, 3);
-            *d.add(2) = vget_lane_u8(b_out, 3);
-            *d.add(3) = vget_lane_u8(r, 2);
-            *d.add(4) = vget_lane_u8(g, 2);
-            *d.add(5) = vget_lane_u8(b_out, 2);
-            *d.add(6) = vget_lane_u8(r, 1);
-            *d.add(7) = vget_lane_u8(g, 1);
-            *d.add(8) = vget_lane_u8(b_out, 1);
-            *d.add(9) = vget_lane_u8(r, 0);
-            *d.add(10) = vget_lane_u8(g, 0);
-            *d.add(11) = vget_lane_u8(b_out, 0);
+            *d = r1;
+            *d.add(1) = g1;
+            *d.add(2) = b1;
+            *d.add(3) = r0;
+            *d.add(4) = g0;
+            *d.add(5) = b0;
         } else {
-            *d = vget_lane_u8(r, 0);
-            *d.add(1) = vget_lane_u8(g, 0);
-            *d.add(2) = vget_lane_u8(b_out, 0);
-            *d.add(3) = vget_lane_u8(r, 1);
-            *d.add(4) = vget_lane_u8(g, 1);
-            *d.add(5) = vget_lane_u8(b_out, 1);
-            *d.add(6) = vget_lane_u8(r, 2);
-            *d.add(7) = vget_lane_u8(g, 2);
-            *d.add(8) = vget_lane_u8(b_out, 2);
-            *d.add(9) = vget_lane_u8(r, 3);
-            *d.add(10) = vget_lane_u8(g, 3);
-            *d.add(11) = vget_lane_u8(b_out, 3);
+            *d = r0;
+            *d.add(1) = g0;
+            *d.add(2) = b0;
+            *d.add(3) = r1;
+            *d.add(4) = g1;
+            *d.add(5) = b1;
         }
     }
 
@@ -210,7 +196,7 @@ mod neon {
         height: usize,
         mirror: bool,
     ) {
-        let groups = width / 4;
+        let pixel_pairs = width / 2;
         for row in 0..height {
             let y_row = y_plane.add(row * width);
             let uv_row = row / 2;
@@ -218,47 +204,31 @@ mod neon {
             let v_row = v_plane.add(uv_row * (width / 2));
             let row_out = dst.add(row * width * 3);
 
-            for g in 0..groups {
-                let yi = g * 4;
-                let ui = g * 2;
-                let u_val = *u_row.add(ui);
-                let v_val = *v_row.add(ui);
+            for g in 0..pixel_pairs {
+                let yi = g * 2;
+                let u_val = *u_row.add(g);
+                let v_val = *v_row.add(g);
                 let di = if mirror {
-                    (groups - 1 - g) * 12
+                    (pixel_pairs - 1 - g) * 6
                 } else {
-                    g * 12
+                    g * 6
                 };
-                yu12_4px(y_row.add(yi), u_val, v_val, row_out.add(di), mirror);
+                yu12_2px(y_row.add(yi), u_val, v_val, row_out.add(di), mirror);
             }
 
-            let col_start = groups * 4;
-            let mut uv_idx = col_start / 2;
-            let mut col = col_start;
-            while col < width {
-                let u = *u_row.add(uv_idx) as i32 - 128;
-                let v = *v_row.add(uv_idx) as i32 - 128;
-                uv_idx += 1;
-                let uv_mul_v = K_V_R * v;
-                let uv_mul_gv = K_V_G * v;
-                let uv_mul_gu = K_U_G * u;
-                let uv_mul_b = K_U_B * u;
-                for px in 0..2 {
-                    if col + px >= width {
-                        break;
-                    }
-                    let y = *y_row.add(col + px) as i32;
-                    let dx = if mirror {
-                        width - 1 - (col + px)
-                    } else {
-                        col + px
-                    };
-                    let o = (row * width + dx) * 3;
-                    let base = K_Y * (y - 16);
-                    *row_out.add(o) = clamp8(div_scale(base + uv_mul_v));
-                    *row_out.add(o + 1) = clamp8(div_scale(base - uv_mul_gv - uv_mul_gu));
-                    *row_out.add(o + 2) = clamp8(div_scale(base + uv_mul_b));
-                }
-                col += 2;
+            let col_start = pixel_pairs * 2;
+            if col_start < width {
+                let u_val = *u_row.add(pixel_pairs);
+                let v_val = *v_row.add(pixel_pairs);
+                let y_val = *y_row.add(col_start) as i32;
+                let u = u_val as i32 - 128;
+                let v = v_val as i32 - 128;
+                let dx = if mirror { 0 } else { col_start };
+                let o = (row * width + dx) * 3;
+                let base = K_Y * (y_val - 16);
+                *row_out.add(o) = clamp8(div_scale(base + K_V_R * v));
+                *row_out.add(o + 1) = clamp8(div_scale(base - K_V_G * v - K_U_G * u));
+                *row_out.add(o + 2) = clamp8(div_scale(base + K_U_B * u));
             }
         }
     }
