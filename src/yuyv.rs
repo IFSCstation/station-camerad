@@ -145,6 +145,164 @@ mod neon {
             }
         }
     }
+
+    pub unsafe fn yuv420_to_rgb8_neon(
+        y_plane: *const u8,
+        u_plane: *const u8,
+        v_plane: *const u8,
+        dst: *mut u8,
+        width: usize,
+        height: usize,
+        mirror: bool,
+    ) {
+        let pixel_groups = width / 8;
+        let remainder = width % 8;
+        for row in 0..height {
+            let y_row = y_plane.add(row * width);
+            let uv_row = row / 2;
+            let u_row = u_plane.add(uv_row * (width / 2));
+            let v_row = v_plane.add(uv_row * (width / 2));
+            let row_out = dst.add(row * width * 3);
+
+            for g in 0..pixel_groups {
+                let yi = g * 8;
+                let ui = g * 4;
+                let di = if mirror {
+                    (pixel_groups - 1 - g) * 24
+                } else {
+                    g * 24
+                };
+
+                let y8 = vld1q_u8(y_row.add(yi));
+                let u4 = vld1_u8(u_row.add(ui));
+                let v4 = vld1_u8(v_row.add(ui));
+
+                let u8_lo = vcombine_u8(u4, u4);
+                let u8_all = vuzp1q_u8(u8_lo, u8_lo);
+                let v8_lo = vcombine_u8(v4, v4);
+                let v8_all = vuzp1q_u8(v8_lo, v8_lo);
+
+                let y_s16 =
+                    vreinterpretq_s16(vsubq_u16(vmovl_u8(vget_low_u8(y8)), vdupq_n_u16(16)));
+                let u_s16 =
+                    vreinterpretq_s16(vsubq_u16(vmovl_u8(vget_low_u8(u8_all)), vdupq_n_u16(128)));
+                let v_s16 =
+                    vreinterpretq_s16(vsubq_u16(vmovl_u8(vget_low_u8(v8_all)), vdupq_n_u16(128)));
+
+                let y_lo = vmovl_s16(vget_low_s16(y_s16));
+                let y_hi = vmovl_s16(vget_high_s16(y_s16));
+                let u_lo = vmovl_s16(vget_low_s16(u_s16));
+                let u_hi = vmovl_s16(vget_high_s16(u_s16));
+                let v_lo = vmovl_s16(vget_low_s16(v_s16));
+                let v_hi = vmovl_s16(vget_high_s16(v_s16));
+
+                let base_lo = vmulq_s32(y_lo, vdupq_n_s32(K_Y));
+                let base_hi = vmulq_s32(y_hi, vdupq_n_s32(K_Y));
+
+                let r_lo = quantize(vmlaq_n_s32(base_lo, v_lo, K_V_R));
+                let r_hi = quantize(vmlaq_n_s32(base_hi, v_hi, K_V_R));
+                let g_lo = quantize(vmlsq_n_s32(vmlsq_n_s32(base_lo, v_lo, K_V_G), u_lo, K_U_G));
+                let g_hi = quantize(vmlsq_n_s32(vmlsq_n_s32(base_hi, v_hi, K_V_G), u_hi, K_U_G));
+                let b_lo = quantize(vmlaq_n_s32(base_lo, u_lo, K_U_B));
+                let b_hi = quantize(vmlaq_n_s32(base_hi, u_hi, K_U_B));
+
+                let r8 = vcombine_u8(r_lo, r_hi);
+                let g8 = vcombine_u8(g_lo, g_hi);
+                let b8 = vcombine_u8(b_lo, b_hi);
+
+                let (r8, g8, b8) = if mirror {
+                    let r8 = vrev64q_u8(r8);
+                    let r8 = vrev32q_u8(r8);
+                    let g8 = vrev64q_u8(g8);
+                    let g8 = vrev32q_u8(g8);
+                    let b8 = vrev64q_u8(b8);
+                    let b8 = vrev32q_u8(b8);
+                    (r8, g8, b8)
+                } else {
+                    (r8, g8, b8)
+                };
+
+                let o0 = vgetq_lane_u8(r8, 0);
+                let o1 = vgetq_lane_u8(g8, 0);
+                let o2 = vgetq_lane_u8(b8, 0);
+                let o3 = vgetq_lane_u8(r8, 1);
+                let o4 = vgetq_lane_u8(g8, 1);
+                let o5 = vgetq_lane_u8(b8, 1);
+                *row_out.add(di) = o0;
+                *row_out.add(di + 1) = o1;
+                *row_out.add(di + 2) = o2;
+                *row_out.add(di + 3) = o3;
+                *row_out.add(di + 4) = o4;
+                *row_out.add(di + 5) = o5;
+                let o6 = vgetq_lane_u8(r8, 2);
+                let o7 = vgetq_lane_u8(g8, 2);
+                let o8 = vgetq_lane_u8(b8, 2);
+                let o9 = vgetq_lane_u8(r8, 3);
+                let o10 = vgetq_lane_u8(g8, 3);
+                let o11 = vgetq_lane_u8(b8, 3);
+                *row_out.add(di + 6) = o6;
+                *row_out.add(di + 7) = o7;
+                *row_out.add(di + 8) = o8;
+                *row_out.add(di + 9) = o9;
+                *row_out.add(di + 10) = o10;
+                *row_out.add(di + 11) = o11;
+                let o12 = vgetq_lane_u8(r8, 4);
+                let o13 = vgetq_lane_u8(g8, 4);
+                let o14 = vgetq_lane_u8(b8, 4);
+                let o15 = vgetq_lane_u8(r8, 5);
+                let o16 = vgetq_lane_u8(g8, 5);
+                let o17 = vgetq_lane_u8(b8, 5);
+                *row_out.add(di + 12) = o12;
+                *row_out.add(di + 13) = o13;
+                *row_out.add(di + 14) = o14;
+                *row_out.add(di + 15) = o15;
+                *row_out.add(di + 16) = o16;
+                *row_out.add(di + 17) = o17;
+                let o18 = vgetq_lane_u8(r8, 6);
+                let o19 = vgetq_lane_u8(g8, 6);
+                let o20 = vgetq_lane_u8(b8, 6);
+                let o21 = vgetq_lane_u8(r8, 7);
+                let o22 = vgetq_lane_u8(g8, 7);
+                let o23 = vgetq_lane_u8(b8, 7);
+                *row_out.add(di + 18) = o18;
+                *row_out.add(di + 19) = o19;
+                *row_out.add(di + 20) = o20;
+                *row_out.add(di + 21) = o21;
+                *row_out.add(di + 22) = o22;
+                *row_out.add(di + 23) = o23;
+            }
+
+            let col_start = pixel_groups * 8;
+            let mut uv_idx = col_start / 2;
+            let mut col = col_start;
+            while col < width {
+                let u = *u_row.add(uv_idx) as i32 - 128;
+                let v = *v_row.add(uv_idx) as i32 - 128;
+                uv_idx += 1;
+                let uv_mul_v = K_V_R * v;
+                let uv_mul_gv = K_V_G * v;
+                let uv_mul_gu = K_U_G * u;
+                let uv_mul_b = K_U_B * u;
+                for px in 0..2 {
+                    if col + px >= width {
+                        break;
+                    }
+                    let y = *y_row.add(col + px) as i32;
+                    let dx = if mirror {
+                        width - 1 - (col + px)
+                    } else {
+                        col + px
+                    };
+                    let o = (row * width + dx) * 3;
+                    let base = K_Y * (y - 16);
+                    *row_out.add(o) = clamp8(div_scale(base + uv_mul_v));
+                    *row_out.add(o + 1) = clamp8(div_scale(base - uv_mul_gv - uv_mul_gu));
+                    *row_out.add(o + 2) = clamp8(div_scale(base + uv_mul_b));
+                }
+                col += 2;
+            }
+        }
+    }
 }
 
 #[cfg(target_arch = "aarch64")]
@@ -204,6 +362,22 @@ pub fn yuv420_to_rgb8(src: &[u8], dst: &mut [u8], width: usize, height: usize, m
     let y_plane = &src[..y_size];
     let u_plane = &src[y_size..][..uv_size];
     let v_plane = &src[y_size + uv_size..][..uv_size];
+
+    #[cfg(target_arch = "aarch64")]
+    if width >= 8 && width.is_multiple_of(8) && fast_path_available() {
+        unsafe {
+            neon::yuv420_to_rgb8_neon(
+                y_plane.as_ptr(),
+                u_plane.as_ptr(),
+                v_plane.as_ptr(),
+                dst.as_mut_ptr(),
+                width,
+                height,
+                mirror,
+            );
+        }
+        return;
+    }
     yuv420_to_rgb8_scalar(y_plane, u_plane, v_plane, dst, width, height, mirror);
 }
 
@@ -245,6 +419,47 @@ pub fn yuyv_to_rgb8(src: &[u8], dst: &mut [u8], width: usize, height: usize, mir
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn yuv420_red_pixel() {
+        let w = 2usize;
+        let h = 2usize;
+        let uv = (w / 2) * (h / 2);
+        let mut frame = vec![0u8; w * h + uv * 2];
+        for y in frame.iter_mut().take(w * h) {
+            *y = 80;
+        }
+        // U=0 (neutral, no blue) at y_size
+        frame[w * h] = 0;
+        // V=255 (max red) at y_size + uv
+        frame[w * h + uv] = 255;
+        let mut dst = vec![0u8; w * h * 3];
+        super::yuv420_to_rgb8(&frame, &mut dst, w, h, false);
+        for px in 0..4 {
+            let r = dst[px * 3];
+            let g = dst[px * 3 + 1];
+            let b = dst[px * 3 + 2];
+            assert!(r > g, "R={} should be > G={}", r, g);
+            assert!(r > b, "R={} should be > B={}", r, b);
+        }
+    }
+
+    #[test]
+    fn yuv420_neutral_is_gray() {
+        let w = 4usize;
+        let h = 2usize;
+        let uv = (w / 2) * (h / 2);
+        let frame = vec![128u8; w * h + uv * 2];
+        let mut dst = vec![0u8; w * h * 3];
+        super::yuv420_to_rgb8(&frame, &mut dst, w, h, false);
+        for px in 0..w * h {
+            let r = dst[px * 3];
+            let g = dst[px * 3 + 1];
+            let b = dst[px * 3 + 2];
+            assert_eq!(r, g, "gray: R={} != G={}", r, g);
+            assert_eq!(g, b, "gray: G={} != B={}", g, b);
+        }
+    }
 
     #[test]
     fn rgb24_passthrough_no_mirror() {
@@ -348,6 +563,65 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    #[test]
+    fn yuv420_neon_matches_scalar_byte_exact() {
+        let mut rng = 0xdead_beef_cafe_babeu64;
+        let next = |rng: &mut u64| {
+            *rng = rng
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+        };
+        let mut mismatches = 0usize;
+        for trial in 0..64 {
+            for w in [8usize, 16, 32] {
+                let h = 8usize;
+                let y_size = w * h;
+                let uv_size = (w / 2) * (h / 2);
+                let mut src = vec![0u8; y_size + uv_size * 2];
+                for b in src.iter_mut() {
+                    next(&mut rng);
+                    *b = if trial < 16 {
+                        (rng >> 56) as u8
+                    } else {
+                        (rng % 179) as u8
+                    };
+                }
+                for mirror in [false, true] {
+                    let mut fast = vec![0u8; w * h * 3];
+                    let mut scalar = vec![0u8; w * h * 3];
+                    super::yuv420_to_rgb8(&src, &mut fast, w, h, mirror);
+                    yuv420_to_rgb8_scalar(
+                        &src[..y_size],
+                        &src[y_size..][..uv_size],
+                        &src[y_size + uv_size..][..uv_size],
+                        &mut scalar,
+                        w,
+                        h,
+                        mirror,
+                    );
+                    for i in 0..fast.len() {
+                        if fast[i] != scalar[i] {
+                            mismatches += 1;
+                            if mismatches <= 5 {
+                                let px = i / 3;
+                                let ch = i % 3;
+                                panic!(
+                                    "yuv420 mismatch trial={trial} mirror={mirror} w={w} px={px} ch={ch}: neon={} scalar={}",
+                                    fast[i], scalar[i]
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert_eq!(
+            mismatches, 0,
+            "yuv420 neon/scalar diverged on {mismatches} bytes"
+        );
     }
 
     #[cfg(target_arch = "aarch64")]
