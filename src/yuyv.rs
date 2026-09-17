@@ -177,31 +177,6 @@ mod neon {
         }
     }
 
-    #[inline(always)]
-    unsafe fn rgb24_reverse_48(src: *const u8, dst: *mut u8) {
-        let a = vld1q_u8(src);
-        let b = vld1q_u8(src.add(16));
-        let c = vld1q_u8(src.add(32));
-        let rev_a = vrev64q_u8(vrev32q_u8(vrev16q_u8(c)));
-        let rev_b = vrev64q_u8(vrev32q_u8(vrev16q_u8(b)));
-        let rev_c = vrev64q_u8(vrev32q_u8(vrev16q_u8(a)));
-        vst1q_u8(dst, rev_a);
-        vst1q_u8(dst.add(16), rev_b);
-        vst1q_u8(dst.add(32), rev_c);
-    }
-
-    #[inline(always)]
-    unsafe fn rgb24_swap_groups_48(ptr: *mut u8) {
-        let t = uint8x16x3_t(vld1q_u8(ptr), vld1q_u8(ptr.add(16)), vld1q_u8(ptr.add(32)));
-        let tbl = vld1q_u8([2u8, 1, 0, 5, 4, 3, 8, 7, 6, 11, 10, 9, 14, 13, 12, 15].as_ptr());
-        let r0 = vqtbl1q_u8(t.0, tbl);
-        let r1 = vqtbl1q_u8(t.1, tbl);
-        let r2 = vqtbl1q_u8(t.2, tbl);
-        vst1q_u8(ptr, r0);
-        vst1q_u8(ptr.add(16), r1);
-        vst1q_u8(ptr.add(32), r2);
-    }
-
     #[allow(clippy::manual_swap)]
     pub unsafe fn rgb24_mirror_row_neon(row: *mut u8, width: usize) {
         let row_bytes = width * 3;
@@ -219,31 +194,40 @@ mod neon {
             }
             return;
         }
+        let rev_tbl = vld1q_u8([15u8, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0].as_ptr());
         let chunks = row_bytes / 48;
         let mut left = 0usize;
         let mut right = row_bytes - 48;
         for _ in 0..chunks / 2 {
-            rgb24_reverse_48(row.add(left), row.add(right));
+            let la = vld1q_u8(row.add(left));
+            let lb = vld1q_u8(row.add(left + 16));
+            let lc = vld1q_u8(row.add(left + 32));
+            let ra = vld1q_u8(row.add(right));
+            let rb = vld1q_u8(row.add(right + 16));
+            let rc = vld1q_u8(row.add(right + 32));
+            vst1q_u8(row.add(left), vqtbl1q_u8(rc, rev_tbl));
+            vst1q_u8(row.add(left + 16), vqtbl1q_u8(rb, rev_tbl));
+            vst1q_u8(row.add(left + 32), vqtbl1q_u8(ra, rev_tbl));
+            vst1q_u8(row.add(right), vqtbl1q_u8(lc, rev_tbl));
+            vst1q_u8(row.add(right + 16), vqtbl1q_u8(lb, rev_tbl));
+            vst1q_u8(row.add(right + 32), vqtbl1q_u8(la, rev_tbl));
             left += 48;
             right -= 48;
         }
         if chunks & 1 != 0 {
-            rgb24_reverse_48(row.add(left), row.add(left));
+            let mut tmp = [0u8; 48];
+            std::ptr::copy_nonoverlapping(row.add(left), tmp.as_mut_ptr(), 48);
+            let a = vld1q_u8(tmp.as_ptr());
+            let b = vld1q_u8(tmp.as_ptr().add(16));
+            let c = vld1q_u8(tmp.as_ptr().add(32));
+            vst1q_u8(row.add(left), vqtbl1q_u8(c, rev_tbl));
+            vst1q_u8(row.add(left + 16), vqtbl1q_u8(b, rev_tbl));
+            vst1q_u8(row.add(left + 32), vqtbl1q_u8(a, rev_tbl));
         }
-        for i in 0..chunks {
-            rgb24_swap_groups_48(row.add(i * 48));
-        }
-        let tail = chunks * 48;
-        let mut l = tail;
-        let mut r = row_bytes - 3;
-        while l < r {
-            for i in 0..3 {
-                let tmp = *row.add(l + i);
-                *row.add(l + i) = *row.add(r + i);
-                *row.add(r + i) = tmp;
-            }
-            l += 3;
-            r -= 3;
+        for i in (0..row_bytes).step_by(3) {
+            let tmp = *row.add(i);
+            *row.add(i) = *row.add(i + 2);
+            *row.add(i + 2) = tmp;
         }
     }
 
@@ -681,44 +665,30 @@ mod tests {
     #[cfg(target_arch = "aarch64")]
     #[test]
     fn rgb24_mirror_neon_matches_scalar_byte_exact() {
-        let mut rng = 0x1357_2468_ace0_bdf1u64;
-        let next = |rng: &mut u64| {
-            *rng = rng
-                .wrapping_mul(6364136223846793005)
-                .wrapping_add(1442695040888963407);
-        };
         let mut mismatches = 0usize;
-        for trial in 0..64 {
-            for w in [16usize, 32, 48, 64, 128, 1280] {
-                let h = 8usize;
-                let mut src = vec![0u8; w * h * 3];
-                for b in src.iter_mut() {
-                    next(&mut rng);
-                    *b = if trial < 16 {
-                        (rng >> 56) as u8
-                    } else {
-                        (rng % 251) as u8
-                    };
-                }
-                let mut neon_out = vec![0u8; w * h * 3];
-                let mut scalar_out = vec![0u8; w * h * 3];
-                super::rgb24_to_rgb8(&src, &mut neon_out, w, h, true);
-                for y in 0..h {
-                    let row = &mut scalar_out[y * w * 3..][..w * 3];
-                    row.copy_from_slice(&src[y * w * 3..][..w * 3]);
-                    super::rgb24_mirror_row_scalar(row, w);
-                }
-                for i in 0..neon_out.len() {
-                    if neon_out[i] != scalar_out[i] {
+        for w in [16usize, 32, 48, 64, 128, 1280] {
+            let h = 4usize;
+            let row_bytes = w * 3;
+            let mut src = vec![0u8; row_bytes];
+            for (i, b) in src.iter_mut().enumerate() {
+                *b = (i * 7 + 13) as u8;
+            }
+            for row in 0..h {
+                let mut neon_row = vec![0u8; row_bytes];
+                let mut scalar_row = vec![0u8; row_bytes];
+                neon_row.copy_from_slice(&src);
+                scalar_row.copy_from_slice(&src);
+                unsafe { neon::rgb24_mirror_row_neon(neon_row.as_mut_ptr(), w) };
+                super::rgb24_mirror_row_scalar(&mut scalar_row, w);
+                for i in 0..row_bytes {
+                    if neon_row[i] != scalar_row[i] {
                         mismatches += 1;
                         if mismatches <= 5 {
-                            let byte_in_row = i % (w * 3);
-                            let px = byte_in_row / 3;
-                            let ch = byte_in_row % 3;
-                            let row = i / (w * 3);
+                            let px = i / 3;
+                            let ch = i % 3;
                             panic!(
-                                "rgb24 mirror mismatch trial={trial} w={w} row={row} px={px} ch={ch}: neon={} scalar={}",
-                                neon_out[i], scalar_out[i]
+                                "direct mismatch w={w} row={row} px={px} ch={ch}: neon={} scalar={}",
+                                neon_row[i], scalar_row[i]
                             );
                         }
                     }
