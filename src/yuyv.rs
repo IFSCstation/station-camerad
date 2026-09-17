@@ -54,7 +54,7 @@ fn yuyv_to_rgb8_scalar(src: &[u8], dst: &mut [u8], width: usize, height: usize, 
 
 #[cfg(target_arch = "aarch64")]
 mod neon {
-    use super::{K_U_B, K_U_G, K_V_G, K_V_R, K_Y};
+    use super::{clamp8, div_scale, K_U_B, K_U_G, K_V_G, K_V_R, K_Y};
     use std::arch::aarch64::*;
 
     #[inline(always)]
@@ -183,11 +183,11 @@ mod neon {
                 let v8_all = vuzp1q_u8(v8_lo, v8_lo);
 
                 let y_s16 =
-                    vreinterpretq_s16(vsubq_u16(vmovl_u8(vget_low_u8(y8)), vdupq_n_u16(16)));
+                    vreinterpretq_s16_u16(vsubq_u16(vmovl_u8(vget_low_u8(y8)), vdupq_n_u16(16)));
                 let u_s16 =
-                    vreinterpretq_s16(vsubq_u16(vmovl_u8(vget_low_u8(u8_all)), vdupq_n_u16(128)));
+                    vreinterpretq_s16_u16(vsubq_u16(vmovl_u8(vget_low_u8(u8_all)), vdupq_n_u16(128)));
                 let v_s16 =
-                    vreinterpretq_s16(vsubq_u16(vmovl_u8(vget_low_u8(v8_all)), vdupq_n_u16(128)));
+                    vreinterpretq_s16_u16(vsubq_u16(vmovl_u8(vget_low_u8(v8_all)), vdupq_n_u16(128)));
 
                 let y_lo = vmovl_s16(vget_low_s16(y_s16));
                 let y_hi = vmovl_s16(vget_high_s16(y_s16));
