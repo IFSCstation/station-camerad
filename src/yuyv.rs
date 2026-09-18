@@ -66,6 +66,72 @@ mod neon {
     }
 
     #[inline(always)]
+    unsafe fn quantize8(lo: int32x4_t, hi: int32x4_t) -> uint8x8_t {
+        let bl = vandq_s32(vshrq_n_s32(lo, 31), vdupq_n_s32(1023));
+        let bh = vandq_s32(vshrq_n_s32(hi, 31), vdupq_n_s32(1023));
+        let ql = vshrq_n_s32(vaddq_s32(lo, bl), 10);
+        let qh = vshrq_n_s32(vaddq_s32(hi, bh), 10);
+        let tl = vqmovun_s32(ql);
+        let th = vqmovun_s32(qh);
+        vqmovn_u16(vcombine_u16(tl, th))
+    }
+
+    #[inline(always)]
+    unsafe fn yuyv_8px(s: *const u8, d: *mut u8, rev: bool) {
+        let input = vld1q_u8(s);
+        let yuv2 = vuzpq_u8(input, input);
+        let y8 = vget_low_u8(yuv2.0);
+        let uv8 = vget_low_u8(yuv2.1);
+        let uv2 = vuzp_u8(uv8, uv8);
+        let uzip = vzip_u8(uv2.0, uv2.0);
+        let vzip = vzip_u8(uv2.1, uv2.1);
+        let u8 = uzip.0;
+        let v8 = vzip.0;
+
+        let y_s16 = vsubq_s16(vreinterpretq_s16_u16(vmovl_u8(y8)), vdupq_n_s16(16));
+        let y32_lo = vmovl_s16(vget_low_s16(y_s16));
+        let y32_hi = vmovl_s16(vget_high_s16(y_s16));
+
+        let u_s16 = vreinterpretq_s16_u16(vmovl_u8(u8));
+        let u32_lo = vsubq_s32(vmovl_s16(vget_low_s16(u_s16)), vdupq_n_s32(128));
+        let u32_hi = vsubq_s32(vmovl_s16(vget_high_s16(u_s16)), vdupq_n_s32(128));
+
+        let v_s16 = vreinterpretq_s16_u16(vmovl_u8(v8));
+        let v32_lo = vsubq_s32(vmovl_s16(vget_low_s16(v_s16)), vdupq_n_s32(128));
+        let v32_hi = vsubq_s32(vmovl_s16(vget_high_s16(v_s16)), vdupq_n_s32(128));
+
+        let ky = vdupq_n_s32(K_Y);
+        let r8 = quantize8(
+            vmlaq_n_s32(vmulq_s32(y32_lo, ky), v32_lo, K_V_R),
+            vmlaq_n_s32(vmulq_s32(y32_hi, ky), v32_hi, K_V_R),
+        );
+        let g8 = quantize8(
+            vmlsq_n_s32(
+                vmlsq_n_s32(vmulq_s32(y32_lo, ky), v32_lo, K_V_G),
+                u32_lo,
+                K_U_G,
+            ),
+            vmlsq_n_s32(
+                vmlsq_n_s32(vmulq_s32(y32_hi, ky), v32_hi, K_V_G),
+                u32_hi,
+                K_U_G,
+            ),
+        );
+        let b8 = quantize8(
+            vmlaq_n_s32(vmulq_s32(y32_lo, ky), u32_lo, K_U_B),
+            vmlaq_n_s32(vmulq_s32(y32_hi, ky), u32_hi, K_U_B),
+        );
+
+        if rev {
+            let rgb = uint8x8x3_t(vrev64_u8(r8), vrev64_u8(g8), vrev64_u8(b8));
+            vst3_u8(d, rgb);
+        } else {
+            let rgb = uint8x8x3_t(r8, g8, b8);
+            vst3_u8(d, rgb);
+        }
+    }
+
+    #[inline(always)]
     unsafe fn yu12_2px(y_ptr: *const u8, u_val: u8, v_val: u8, d: *mut u8, rev: bool) {
         let y0 = *y_ptr as i32;
         let y1 = *y_ptr.add(1) as i32;
@@ -157,17 +223,27 @@ mod neon {
         height: usize,
         mirror: bool,
     ) {
-        let groups = width / 4;
+        let groups8 = width / 8;
+        let tail4 = (width % 8) / 4;
         for y in 0..height {
             let row_in = &src[y * width * 2..][..width * 2];
             let row_out = &mut dst[y * width * 3..][..width * 3];
-            for g in 0..groups {
-                let si = g * 8;
+            for g in 0..groups8 {
+                let si = g * 16;
                 let di = if mirror {
-                    (groups - 1 - g) * 12
+                    (groups8 - 1 - g) * 24
                 } else {
-                    g * 12
+                    g * 24
                 };
+                yuyv_8px(
+                    row_in.as_ptr().add(si),
+                    row_out.as_mut_ptr().add(di),
+                    mirror,
+                );
+            }
+            if tail4 > 0 {
+                let si = groups8 * 16;
+                let di = if mirror { (groups8) * 24 } else { groups8 * 24 };
                 yuyv_4px(
                     row_in.as_ptr().add(si),
                     row_out.as_mut_ptr().add(di),
