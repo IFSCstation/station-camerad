@@ -194,40 +194,57 @@ mod neon {
             }
             return;
         }
-        let rev_tbl = vld1q_u8([15u8, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0].as_ptr());
+        let zeros = vdupq_n_u8(0);
+        let idx0 = vld1q_u8(
+            [
+                45u8, 46, 47, 42, 43, 44, 39, 40, 41, 36, 37, 38, 33, 34, 35, 30,
+            ]
+            .as_ptr(),
+        );
+        let idx1 = vld1q_u8(
+            [
+                31u8, 32, 27, 28, 29, 24, 25, 26, 21, 22, 23, 18, 19, 20, 15, 16,
+            ]
+            .as_ptr(),
+        );
+        let idx2 = vld1q_u8([17u8, 12, 13, 14, 9, 10, 11, 6, 7, 8, 3, 4, 5, 0, 1, 2].as_ptr());
         let chunks = row_bytes / 48;
         let mut left = 0usize;
         let mut right = row_bytes - 48;
         for _ in 0..chunks / 2 {
-            let la = vld1q_u8(row.add(left));
-            let lb = vld1q_u8(row.add(left + 16));
-            let lc = vld1q_u8(row.add(left + 32));
-            let ra = vld1q_u8(row.add(right));
-            let rb = vld1q_u8(row.add(right + 16));
-            let rc = vld1q_u8(row.add(right + 32));
-            vst1q_u8(row.add(left), vqtbl1q_u8(rc, rev_tbl));
-            vst1q_u8(row.add(left + 16), vqtbl1q_u8(rb, rev_tbl));
-            vst1q_u8(row.add(left + 32), vqtbl1q_u8(ra, rev_tbl));
-            vst1q_u8(row.add(right), vqtbl1q_u8(lc, rev_tbl));
-            vst1q_u8(row.add(right + 16), vqtbl1q_u8(lb, rev_tbl));
-            vst1q_u8(row.add(right + 32), vqtbl1q_u8(la, rev_tbl));
+            let tbl = uint8x16x4_t(
+                vld1q_u8(row.add(left)),
+                vld1q_u8(row.add(left + 16)),
+                vld1q_u8(row.add(left + 32)),
+                zeros,
+            );
+            let tbl_r = uint8x16x4_t(
+                vld1q_u8(row.add(right)),
+                vld1q_u8(row.add(right + 16)),
+                vld1q_u8(row.add(right + 32)),
+                zeros,
+            );
+            vst1q_u8(row.add(right), vqtbx4q_u8(zeros, tbl, idx0));
+            vst1q_u8(row.add(right + 16), vqtbx4q_u8(zeros, tbl, idx1));
+            vst1q_u8(row.add(right + 32), vqtbx4q_u8(zeros, tbl, idx2));
+            vst1q_u8(row.add(left), vqtbx4q_u8(zeros, tbl_r, idx0));
+            vst1q_u8(row.add(left + 16), vqtbx4q_u8(zeros, tbl_r, idx1));
+            vst1q_u8(row.add(left + 32), vqtbx4q_u8(zeros, tbl_r, idx2));
             left += 48;
             right -= 48;
         }
         if chunks & 1 != 0 {
             let mut tmp = [0u8; 48];
             std::ptr::copy_nonoverlapping(row.add(left), tmp.as_mut_ptr(), 48);
-            let a = vld1q_u8(tmp.as_ptr());
-            let b = vld1q_u8(tmp.as_ptr().add(16));
-            let c = vld1q_u8(tmp.as_ptr().add(32));
-            vst1q_u8(row.add(left), vqtbl1q_u8(c, rev_tbl));
-            vst1q_u8(row.add(left + 16), vqtbl1q_u8(b, rev_tbl));
-            vst1q_u8(row.add(left + 32), vqtbl1q_u8(a, rev_tbl));
-        }
-        for i in (0..row_bytes).step_by(3) {
-            let tmp = *row.add(i);
-            *row.add(i) = *row.add(i + 2);
-            *row.add(i + 2) = tmp;
+            let tbl = uint8x16x4_t(
+                vld1q_u8(tmp.as_ptr()),
+                vld1q_u8(tmp.as_ptr().add(16)),
+                vld1q_u8(tmp.as_ptr().add(32)),
+                zeros,
+            );
+            vst1q_u8(row.add(left), vqtbx4q_u8(zeros, tbl, idx0));
+            vst1q_u8(row.add(left + 16), vqtbx4q_u8(zeros, tbl, idx1));
+            vst1q_u8(row.add(left + 32), vqtbx4q_u8(zeros, tbl, idx2));
         }
     }
 
@@ -385,6 +402,18 @@ pub fn rgb24_to_rgb8(src: &[u8], dst: &mut [u8], width: usize, height: usize, mi
         }
         rgb24_mirror_row_scalar(row, width);
     }
+}
+
+#[allow(clippy::missing_safety_doc)]
+pub unsafe fn rgb24_mirror_row(row: *mut u8, width: usize) {
+    #[cfg(target_arch = "aarch64")]
+    if width >= 16 && fast_path_available() {
+        neon::rgb24_mirror_row_neon(row, width);
+        return;
+    }
+    let row_bytes = width * 3;
+    let slice = std::slice::from_raw_parts_mut(row, row_bytes);
+    rgb24_mirror_row_scalar(slice, width);
 }
 
 pub fn yuyv_to_rgb8(src: &[u8], dst: &mut [u8], width: usize, height: usize, mirror: bool) {

@@ -13,5 +13,9 @@ path = "src/lib.rs"
 name = "camerad"
 path = "src/bin/camerad.rs"
 
+[[bin]]
+name = "bench_mirror"
+path = "src/bin/bench_mirror.rs"
+
 [dependencies]
 libc = "0.2"
