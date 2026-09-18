@@ -19,7 +19,6 @@ extern "C" fn on_signal(_: libc::c_int) {
 struct Args {
     camera: String,
     path: String,
-    mirror: bool,
     fps: f64,
     preview: bool,
     log: bool,
@@ -27,11 +26,10 @@ struct Args {
 
 fn usage() -> String {
     format!(
-        "usage: camerad [--camera <index|path>] [--path <ring>] [--mirror] [--fps <fps>] [--preview] [-v|--log]\n\
+        "usage: camerad [--camera <index|path>] [--path <ring>] [--fps <fps>] [--preview] [-v|--log]\n\
          owns the webcam, publishes RGB8 frames to the shared cam_ring\n\
          --camera  camera index or device path (default 0)\n\
          --path    shared-memory ring file (default {CAM_RING_DEFAULT})\n\
-         --mirror  flip frames horizontally before publishing (Godot + tracker see the mirrored feed)\n\
          --fps     cap the publish rate (0 = as fast as the camera)\n\
          --preview no window; prints ring geometry + publish statistics\n\
          -v, --log log the startup line and publish statistics (default: silent)"
@@ -42,7 +40,6 @@ fn parse_args() -> std::result::Result<Args, String> {
     let mut args = Args {
         camera: "0".into(),
         path: CAM_RING_DEFAULT.into(),
-        mirror: false,
         fps: 0.0,
         preview: false,
         log: false,
@@ -52,7 +49,6 @@ fn parse_args() -> std::result::Result<Args, String> {
         match a.as_str() {
             "--camera" => args.camera = it.next().ok_or("--camera needs a value")?,
             "--path" => args.path = it.next().ok_or("--path needs a value")?,
-            "--mirror" => args.mirror = true,
             "--preview" => args.preview = true,
             "-v" | "--log" => args.log = true,
             "--fps" => {
@@ -165,11 +161,11 @@ fn run(args: &Args) -> io::Result<()> {
 
         ring.submit_with(|dst| {
             if is_rgb24 {
-                yuyv::rgb24_to_rgb8(camera.frame(), dst, fw as usize, fh as usize, args.mirror);
+                yuyv::rgb24_to_rgb8(camera.frame(), dst, fw as usize, fh as usize);
             } else if is_yu12 {
-                yuyv::yuv420_to_rgb8(camera.frame(), dst, fw as usize, fh as usize, args.mirror);
+                yuyv::yuv420_to_rgb8(camera.frame(), dst, fw as usize, fh as usize);
             } else {
-                yuyv::yuyv_to_rgb8(camera.frame(), dst, fw as usize, fh as usize, args.mirror);
+                yuyv::yuyv_to_rgb8(camera.frame(), dst, fw as usize, fh as usize);
             }
         });
         camera.release()?;
