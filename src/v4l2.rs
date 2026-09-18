@@ -182,10 +182,14 @@ pub struct Camera {
 
 impl Camera {
     pub fn open(path: &Path) -> io::Result<Self> {
-        let file = std::fs::OpenOptions::new()
+        let file = match std::fs::OpenOptions::new()
             .read(true)
             .write(true)
-            .open(path)?;
+            .open(path)
+        {
+            Ok(f) => f,
+            Err(_) => std::fs::OpenOptions::new().read(true).open(path)?,
+        };
         let fd = OwnedFd::from(file);
 
         let mut cap: V4l2Capability = unsafe { std::mem::zeroed() };
